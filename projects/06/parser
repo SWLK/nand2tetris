@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# Parser for assembler
+
+# command type function: determine if it's an a-, c- or l- command
+
+commandtype() {
+	local type=""
+
+	case "$1" in
+		@*)				type="A_COMMAND" ;;
+		*[=\;]*)		type="C_COMMAND" ;;
+		*\(*\)*)		type="L_COMMAND" ;;
+	esac
+	echo "$type"
+	return
+}
+
+# symbol: returns the binary of @ or () commands
+
+symbol () {
+	local line="$1"
+	local bin=""
+	local len=""
+	local bits="0000000000000000"
+
+	# Get the decimal number in A- or L- Commands
+	dec=`echo "$line" | tr -d "@()"`
+
+	# Get the binary version of the decimal symbol
+	bin=`bc <<- EOF
+				obase=2
+				$dec
+				EOF`
+
+	# Get the length of the symbol in binary
+	len=`bc <<- EOF
+				length($bin)
+				EOF`
+
+	# Remove $len amount of 0 from $bits
+	bits=`echo "$bits" | sed "s/^[0]\{$len\}//"`
+
+	line="$bits$bin"
+
+	echo "$line"
+	return
+}
+
+# dest: returns the dest mnemonic if it's a c-command
+
+dest () {
+	local line="$1"
+	local mne=""
+	local A="0"
+	local D="0"
+	local M="0"
+
+	mne=`echo "$line" | grep -q "=" && echo "$line" | sed 's/^\([ADM]*\)\(=[[:graph:]]*\)/\1/'`
+
+	echo "$mne" | grep -q "A" && A="1"
+	echo "$mne" | grep -q "D" && D="1"
+	echo "$mne" | grep -q "M" && M="1"
+
+	echo "$A$D$M"
+
+	return
+}
+
+# comp: returns the comp mnemonic if it's a c-command
+
+comp () {
+	local line="$1"
+	local mne=""
+	local bin=""
+
+	# Variable assignment after the '&&' operator so it would not
+	# take in the output of 'grep' as value
+	# (if grep exits with 1 and '&&' fails)
+	echo "$line" | grep -q "=" && mne=`echo "$line" | sed 's/\([ADM]*=\)\([[:graph:]]*\)/\2/'` || mne="$line"
+
+	echo "$mne" | grep -q ";" && mne=`echo "$line" | sed 's/\(^[^;]*\)\(;[[:graph:]]*\)/\1/'`
+
+	# Command substitution invokes a subshell
+	# Variable assignment is done outside the substitution
+	# using the output of the subshell
+	echo "$mne" | grep -q "[AM]" \
+	&& { bin=`echo "$mne" | grep -q "M" && echo "1" || echo "0"`; \
+	   bin=`
+		case "$mne" in
+			?)			echo "${bin}110000" ;;
+			'!'?)		echo "${bin}110001" ;;
+			'-'?)		echo "${bin}110011" ;;
+			?'+1')		echo "${bin}110111" ;;
+			?'-1')		echo "${bin}110010" ;;
+			'D+'?)		echo "${bin}000010" ;;
+			'D-'?)		echo "${bin}010011" ;;
+			?'-D')		echo "${bin}000111" ;;
+			'D&'?)		echo "${bin}000000" ;;
+			'D|'?)		echo "${bin}010101" ;;
+			*)			echo "Invalid comp command 1"
+						exit 1 ;;
+		esac`; } \
+	|| bin=`case "$mne" in
+			"0")		echo "0101010" ;;
+			"1")		echo "0111111" ;;
+			"-1")		echo "0111010" ;;
+			"D")		echo "0001100" ;;
+			"!D")		echo "0001101" ;;
+			"-D")		echo "0001111" ;;
+			"D+1")		echo "0011111" ;;
+			"D-1")		echo "0001110" ;;
+			*)			echo "Invalid comp command 2"
+						exit 1 ;;
+		esac`
+
+	echo "$bin"
+	return
+}
+
+# jump: returns the jump mnemonic if it's a c-command
+
+jump () {
+	local line="$1"
+	local mne=""
+	local bin=""
+
+	mne=`echo "$line" | grep -q ";" && echo "$line" | sed 's/\(^[=+-|&![:alnum:]]*;\)\([JMPGLTEQN]*$\)/\2/'`
+
+	case "$mne" in
+		"JGT")	bin="001" ;;
+		"JEQ")	bin="010" ;;
+		"JGE")	bin="011" ;;
+		"JLT")	bin="100" ;;
+		"JNE")	bin="101" ;;
+		"JLE")	bin="110" ;;
+		"JMP")	bin="111" ;;
+		*)		bin="000" ;;	
+	esac
+
+	echo "$bin"
+
+	return
+}
+
+# loop: read a .asm file line by line and write to a .hack file for each
+
+# Receive content either from a file ($1) or from stdin (here document)
+CONTENT=""
+[[ -f "$1" ]] && CONTENT="$1" || CONTENT="/dev/stdin"
+
+while read line; do
+	
+	# Ignore comments and empty lines, assign type to lines with code
+	type=""
+	case "$line" in
+		//*)					;;
+		*[[:alnum:]]*)			type="`commandtype ${line}`" ;;
+		*)						;;
+	esac
+
+	# Trim leading and trailing whitespace from line
+	line=$(echo "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+	# Trim inline comments
+	echo "$line" | grep -q "//" && line="$(echo "$line" | sed 's/\([=;@[:alnum:]_.$:]*\)\([[:blank:]]*\/\/[[:space:][:graph:]]*\)/\1/')"
+
+	case "$type" in
+		"A_COMMAND")			symbol "$line" ;;
+		"C_COMMAND")			echo "111`comp "$line"``dest "$line"``jump "$line"`" ;;
+		"L_COMMAND")			symbol "$line" ;;
+	esac
+done < $CONTENT

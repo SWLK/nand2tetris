@@ -1,0 +1,143 @@
+#!/bin/bash
+
+# SymbolTable for assembler
+
+# Constructor: Create the hash table (associative array)
+
+declare -A table
+
+# Predefined symbols
+table[R0]=0
+table[R1]=1
+table[R2]=2
+table[R3]=3
+table[R4]=4
+table[R5]=5
+table[R6]=6
+table[R7]=7
+table[R8]=8
+table[R9]=9
+table[R10]=10
+table[R11]=11
+table[R12]=12
+table[R13]=13
+table[R14]=14
+table[R15]=15
+
+table[SP]=0
+table[LCL]=1
+table[ARG]=2
+table[THIS]=3
+table[THAT]=4
+
+table[SCREEN]=16384
+table[KBD]=24576
+
+# addEntry: Adds the (symbol, address) pair to the table
+
+addEntry () {
+	local symbol="$1"
+	local value="$2"
+	
+	[[ "$symbol" ]] && [[ -n "$symbol" ]] && table["$symbol"]="$value"
+
+	return
+}
+
+# contains: Checks if the table contains a given symbol
+# returns 0 if a matching symbol is found and 1 if not found
+
+contains () {
+	local symbol="$1"
+
+	for i in "${!table[@]}"; do
+		[[ "$symbol" == "$i" ]] && return 0
+	done
+
+	return 1
+}
+
+# getAddress: Returns the address associated with a given symbol
+
+getAddress () {
+	local symbol="$1"
+	echo "${table["$symbol"]}"
+	return
+}
+
+# first loop through the document clearing comment lines and blank lines
+# also collecting symbols
+
+# Select content from arg if arg exists else from stdin (here document)
+
+CONTENT=""
+
+[[ -f "$1" ]] && CONTENT="$1" || CONTENT="/dev/stdin"
+
+case "$CONTENT" in
+	"/dev/stdin")			filename="st" ;;
+
+	*)						filename=`echo "$CONTENT" | sed 's/.asm//'` ;;
+esac
+
+ln_count=0
+reg_count=16
+
+# Create a temporary file to hold the cleaned up file (without comments, empty lines and space characters)
+tmp_filename=`echo "${filename}.tmp"`
+touch "$tmp_filename"
+
+while read line; do
+	# Remove comments and empty lines, as well as trimming space characters from actual lines
+	case "$line" in
+		//*)				continue ;;
+		*[[:alnum:]]*)		line=`echo "$line" | sed 's/[[:space:]]*\/\/[[:space:][:graph:]]*//' | tr -d "[[:space:]]"` ;;
+		*)					continue ;;
+	esac
+
+	# Send the cleaned up line to temporary file
+	echo "$line" >> $tmp_filename
+	
+	# Adding entries of symbols with their corresponding address values
+	# A-Commands: Check if the symbol is referencing an L-Command. If yes, do not add entry. If not, add entry.
+	# L-Commands: Add entry of the line number
+	symbol=""
+	case "$line" in
+		@[[:alpha:]_.$:]*)					symbol=`echo "$line" | tr -d "@"`
+											contains "$symbol" || { cat "$CONTENT" | grep -q "($symbol)"; } || { addEntry "$symbol" "$reg_count"; ((++reg_count)); }
+											((++ln_count)) ;;
+							
+		\(*\))								symbol=`echo "$line" | tr -d "()"`
+											addEntry "$symbol" "$ln_count" ;;
+
+		*)									((++ln_count))
+											continue ;;
+	esac
+
+done < "$CONTENT"
+
+# Debugging: Prints the entire symbol table after the first pass
+# echo "symbol table: "
+# for i in "${!table[@]}"; do
+# 	echo "$i: ${table[$i]}"
+# done
+# echo "end"
+
+while read line; do
+	symbol=""
+	value=""
+	case "$line" in
+		# A-Commands: replace symbol with decimal value from table
+		@[[:alpha:]_.$:]*)					symbol=`echo "$line" | tr -d "@"`
+											value=`getAddress "$symbol"`
+											echo "@$value" ;;
+
+		# L-Commands: remove by skipping
+		\(*\))								continue ;;
+
+		# C-Commands: print the line
+		*)									echo "$line" ;;
+	esac
+done < $tmp_filename
+
+rm "$tmp_filename"

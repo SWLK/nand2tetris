@@ -1,0 +1,25 @@
+#!/bin/bash
+
+CONTENT=`[[ -f "$1" ]] && echo "$1" || echo "/dev/stdin"`
+
+case "$CONTENT" in
+	"/dev/stdin")			read -p "Enter the name for .hack file: " filename
+							filename=`echo "$filename" | sed 's/.hack//'` ;;
+
+	*)						filename=`echo "$CONTENT" | sed 's/.asm//'` ;;
+esac
+
+while [[ -f "${filename}.hack" ]]; do
+	read -p "${filename}.hack already exists, overwrite [y/n]? " overwrite
+	
+	case "$overwrite" in
+		y|Y)			rm "${filename}.hack" ;;
+
+		*)				read -p "Enter the name for .hack file: " filename
+						filename=`echo "$filename" | sed 's/.hack//'` ;;
+	esac
+done
+
+symboltable "$CONTENT" | parser > "${filename}.hack"
+
+echo "Done!"
